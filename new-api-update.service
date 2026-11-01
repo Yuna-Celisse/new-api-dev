@@ -1,0 +1,12 @@
+[Unit]
+Description=Update New API development image with database backup and rollback
+Wants=network-online.target
+After=network-online.target docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/new-api
+ExecStart=/usr/bin/python3 /opt/new-api/update.py
+TimeoutStartSec=20min
+UMask=0077
