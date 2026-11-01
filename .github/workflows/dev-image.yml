@@ -1,0 +1,93 @@
+name: Daily New API development image
+
+on:
+  schedule:
+    - cron: '17 19 * * *'
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/dev-image.yml']
+
+permissions:
+  contents: write
+  packages: write
+
+concurrency:
+  group: dev-image
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Check out upstream main
+        uses: actions/checkout@v4
+        with:
+          repository: QuantumNous/new-api
+          ref: main
+          persist-credentials: false
+          submodules: recursive
+      - name: Resolve version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha=$(git rev-parse HEAD)
+          image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/new-api"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+          printf 'dev-%s-%s\n' "$(date -u +%Y%m%d)" "${sha:0:12}" > VERSION
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build upstream Dockerfile
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          tags: |
+            ${{ steps.version.outputs.image }}:dev
+            ${{ steps.version.outputs.image }}:dev-${{ steps.version.outputs.sha }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ steps.version.outputs.sha }}
+            org.opencontainers.image.url=https://github.com/QuantumNous/new-api
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Check clean SQLite startup
+        env:
+          IMAGE: ${{ steps.version.outputs.image }}
+        run: |
+          set -euo pipefail
+          docker run -d --name smoke -p 127.0.0.1:3000:3000 -e SESSION_SECRET="$(openssl rand -hex 32)" "$IMAGE:dev"
+          trap 'docker logs --tail 40 smoke; docker rm -f smoke' EXIT
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:3000/api/status | jq -e '.success == true' >/dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          exit 1
+      - name: Publish images and download bundle
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE: ${{ steps.version.outputs.image }}
+          REVISION: ${{ steps.version.outputs.sha }}
+        run: |
+          set -euo pipefail
+          docker push "$IMAGE:dev-$REVISION"
+          docker push "$IMAGE:dev"
+          mkdir -p bundle
+          docker save "$IMAGE:dev-$REVISION" | gzip -1 > bundle/new-api-dev.tar.gz
+          printf '%s\n' "$REVISION" > bundle/revision.txt
+          (cd bundle && sha256sum new-api-dev.tar.gz revision.txt > SHA256SUMS)
+          release="dev-$REVISION"
+          if ! gh release view "$release" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$release" --repo "$GITHUB_REPOSITORY" --target main --prerelease --title "New API dev ${REVISION:0:12}" --notes "Unmodified upstream source: https://github.com/QuantumNous/new-api/commit/$REVISION" bundle/*
+          fi
+          printf 'Built upstream `%s`\n\nImage: `%s:dev`\n' "$REVISION" "$IMAGE" >> "$GITHUB_STEP_SUMMARY"
