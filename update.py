@@ -127,6 +127,14 @@ def main():
         snapshots = sorted((BASE / 'backups').glob('new-api-*'))
         for old in snapshots[:-7]:
             shutil.rmtree(old)
+        tags = subprocess.check_output(['docker', 'image', 'ls', IMAGE, '--format', '{{.Tag}}'], text=True).splitlines()
+        versioned = [f'{IMAGE}:{tag}' for tag in tags if re.fullmatch(r'dev-[0-9a-f]{40}', tag)]
+        if len(versioned) > 3:
+            details = json.loads(subprocess.check_output(['docker', 'image', 'inspect', *versioned], text=True))
+            keep_ids = {item['Id'] for item in sorted(details, key=lambda x: x['Created'], reverse=True)[:3]}
+            for tag, item in zip(versioned, details):
+                if item['Id'] not in keep_ids and tag != target:
+                    subprocess.run(['docker', 'image', 'rm', tag], check=False)
     finally:
         for name in names:
             (download / name).unlink(missing_ok=True)

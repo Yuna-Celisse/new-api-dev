@@ -4,3 +4,5 @@ logs/
 backups/
 downloads/
 *.key
+__pycache__/
+image.env
