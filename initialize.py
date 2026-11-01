@@ -4,7 +4,6 @@ import json
 import os
 from pathlib import Path
 import secrets
-import urllib.parse
 
 import requests
 
@@ -41,8 +40,12 @@ result = session.post(base + '/api/user/login', json={
     'username': credentials['username'], 'password': credentials['password'],
 }, timeout=30).json()
 assert result.get('success'), result.get('message', 'Administrator login failed')
-assert result.get('data', {}).get('id'), 'Login did not return a user ID'
-session.headers['New-Api-User'] = str(result['data']['id'])
+auth = result.get('data', {})
+user = auth.get('user', auth)
+assert user.get('id'), 'Login did not return a user ID'
+session.headers['New-Api-User'] = str(user['id'])
+if auth.get('access_token'):
+    session.headers['Authorization'] = 'Bearer ' + auth['access_token']
 # This bootstrap talks only over the server loopback; browsers retain Secure cookies.
 for cookie in session.cookies:
     cookie.secure = False
